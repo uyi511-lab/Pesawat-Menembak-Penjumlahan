@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Math Air Strike: Misi Penjumlahan</title>
+<style>
+html,body{margin:0;height:100%;background:#0a1230;overflow:hidden;font-family:"Trebuchet MS",system-ui,sans-serif;color:#fff}
+#video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);background:#0a1230}
+#game{position:fixed;inset:0;width:100%;height:100%}
+.panel{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(8,14,44,.86);text-align:center;padding:18px;z-index:5;overflow:auto}
+.panel.hide,#topbtns.hide{display:none}
+h1{margin:0;font-size:clamp(26px,5.5vw,52px);color:#ffe14d;text-shadow:0 4px 0 #e0561f,0 0 24px #ff9a3c}
+h2{margin:0;font-size:22px;color:#7df9ff}
+ol{margin:0;padding:0 0 0 22px;text-align:left;line-height:1.6;font-size:16px}
+p,.note{margin:0;max-width:480px;line-height:1.5;color:#cfe3ff;font-size:14px}
+button{font:inherit;font-weight:800;padding:12px 24px;border:0;border-radius:14px;background:linear-gradient(180deg,#ffd23f,#ff7a2f);color:#3a1500;font-size:18px;cursor:pointer;box-shadow:0 4px 0 #b24a10,0 0 18px rgba(255,170,60,.5)}
+button.s{padding:8px 14px;font-size:14px;background:linear-gradient(180deg,#7df9ff,#2fa0ff);color:#00253d;box-shadow:0 3px 0 #1a6aa8}
+button:disabled{opacity:.55;cursor:wait}
+button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+#topbtns{position:fixed;top:10px;right:10px;display:flex;gap:8px;z-index:4}
+#status{min-height:20px;color:#ffe08a;font-size:14px}
+#errmsg{color:#ff9a9a;font-weight:700;max-width:480px;line-height:1.5}
+.stat{font-size:20px;line-height:1.7}
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="game"></canvas>
+
+<div id="topbtns" class="hide">
+  <button class="s" id="btnPause">JEDA</button>
+  <button class="s" id="btnMusic">Musik: ON</button>
+</div>
+
+<div class="panel" id="menu">
+  <h1>✈️ MATH AIR STRIKE<br>MISI PENJUMLAHAN</h1>
+  <h2>Petunjuk</h2>
+  <ol>
+    <li>Izinkan akses webcam.</li>
+    <li>Angkat satu tangan di depan kamera.</li>
+    <li>Gerakkan ujung telunjuk untuk mengarahkan pesawat.</li>
+    <li>Arahkan telunjuk ke jawaban yang benar.</li>
+    <li>Tahan selama 0,6 detik untuk menembak target.</li>
+  </ol>
+  <button id="btnStart">MULAI GAME</button>
+  <div id="status"></div>
+  <div class="note">Akses webcam memerlukan HTTPS atau localhost. Gunakan Chrome atau Edge terbaru.</div>
+</div>
+
+<div class="panel hide" id="errp">
+  <h1 style="font-size:30px;color:#ff9a9a;text-shadow:none">Ada masalah</h1>
+  <div id="errmsg"></div>
+  <button id="btnRetry">COBA LAGI</button>
+</div>
+
+<div class="panel hide" id="win">
+  <h1>🏆 MISI SELESAI!</h1>
+  <div class="stat" id="winstat"></div>
+  <p id="winmsg"></p>
+  <button id="btnAgain">MAIN LAGI</button>
+</div>
+
+<script>
+(function () {
+'use strict';
+var $ = function (id) { return document.getElementById(id); };
+var video = $('video'), cv = $('game'), ctx = cv.getContext('2d');
+var W = 0, H = 0, DPR = 1, failed = false;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize); resize();
+
+/* ---------- Error ---------- */
+function showError(msg) {
+  failed = true; $('errmsg').textContent = msg;
+  ['menu', 'win'].forEach(function (i) { $(i).classList.add('hide'); });
+  $('topbtns').classList.add('hide'); $('errp').classList.remove('hide'); console.error(msg);
+}
+window.addEventListener('error', function (e) { showError('Terjadi kesalahan program: ' + (e.message || 'tidak diketahui')); });
+window.addEventListener('unhandledrejection', function (e) { var r = e.reason; showError('Terjadi kesalahan: ' + (r && r.message ? r.message : r)); });
+$('btnRetry').addEventListener('click', function () { location.reload(); });
+function setStatus(s) { $('status').textContent = s; }
+
+/* ---------- Audio ---------- */
+var AC = null, musicOn = true, mStep = 0, mTimer = null;
+function initAudio() {
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); } catch (e) { AC = null; }
+}
+function tone(f, d, type, g, delay, slide) {
+  if (!AC) return;
+  try {
+    var t = AC.currentTime + (delay || 0), o = AC.createOscillator(), v = AC.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + d);
+    v.gain.setValueAtTime(g || 0.08, t); v.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(v); v.connect(AC.destination); o.start(t); o.stop(t + d + 0.02);
+  } catch (e) {}
+}
+var SFX = {
+  lock: function () { tone(760, 0.05, 'square', 0.025); },
+  laser: function () { tone(1600, 0.2, 'sawtooth', 0.05, 0, 220); },
+  boom: function () { tone(220, 0.4, 'sawtooth', 0.09, 0, 40); tone(880, 0.25, 'triangle', 0.07, 0.05, 1500); },
+  ok: function () { tone(523, 0.12, 'triangle', 0.1); tone(659, 0.12, 'triangle', 0.1, 0.1); tone(784, 0.12, 'triangle', 0.1, 0.2); tone(1047, 0.25, 'triangle', 0.1, 0.3); },
+  bad: function () { tone(200, 0.3, 'square', 0.05, 0, 110); },
+  level: function () { tone(660, 0.1, 'square', 0.05); tone(880, 0.1, 'square', 0.05, 0.1); tone(1320, 0.2, 'square', 0.05, 0.2); }
+};
+var NOTES = [523, 659, 784, 659, 587, 698, 880, 698, 523, 659, 784, 1047, 988, 784, 659, 784];
+function musicStart() {
+  if (mTimer) return;
+  mTimer = setInterval(function () {
+    if (!musicOn || !AC || state === 'pause' || state === 'win' || state === 'menu') return;
+    var f = NOTES[mStep++ % NOTES.length]; tone(f, 0.22, 'triangle', 0.022);
+    if (mStep % 4 === 1) tone(f / 4, 0.45, 'sine', 0.035);
+  }, 260);
+}
+$('btnMusic').addEventListener('click', function () { musicOn = !musicOn; this.textContent = 'Musik: ' + (musicOn ? 'ON' : 'OFF'); });
+
+/* ---------- Kamera + MediaPipe ---------- */
+var landmarker = null, lastVT = -1, trackErr = 0, lastSeen = 0, cur = { x: 0, y: 0, has: false };
+function withTimeout(p, ms, msg) {
+  return new Promise(function (res, rej) {
+    var t = setTimeout(function () { rej(new Error(msg)); }, ms);
+    p.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); });
+  });
+}
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error('Browser tidak mendukung kamera. Buka game ini lewat HTTPS atau localhost menggunakan Chrome/Edge.');
+  }
+  var stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  } catch (e) {
+    var n = e && e.name;
+    if (n === 'NotAllowedError') throw new Error('Izin kamera belum diberikan. Klik ikon kamera di address bar, pilih Izinkan, lalu tekan COBA LAGI.');
+    if (n === 'NotFoundError') throw new Error('Kamera tidak ditemukan. Pastikan webcam terpasang.');
+    if (n === 'NotReadableError') throw new Error('Kamera sedang dipakai aplikasi lain. Tutup aplikasi itu lalu coba lagi.');
+    throw new Error('Kamera gagal dinyalakan: ' + (e && e.message ? e.message : n));
+  }
+  video.srcObject = stream; await video.play();
+  await withTimeout(new Promise(function (r) {
+    if (video.readyState >= 2 && video.videoWidth) r(); else video.onloadeddata = function () { r(); };
+  }), 10000, 'Video kamera tidak mau mulai.');
+}
+async function loadModel() {
+  var base = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14', mod;
+  try { mod = await withTimeout(import(base + '/vision_bundle.mjs'), 30000, 'timeout'); }
+  catch (e) { throw new Error('MediaPipe gagal dimuat dari CDN. Periksa koneksi internet lalu coba lagi.'); }
+  var fs = await withTimeout(mod.FilesetResolver.forVisionTasks(base + '/wasm'), 30000, 'File WASM MediaPipe gagal dimuat.');
+  var url = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+  function make(d) {
+    return mod.HandLandmarker.createFromOptions(fs, {
+      baseOptions: { modelAssetPath: url, delegate: d }, runningMode: 'VIDEO', numHands: 1,
+      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.6
+    });
+  }
+  try { landmarker = await withTimeout(make('GPU'), 30000, 'gpu'); }
+  catch (e) {
+    try { landmarker = await withTimeout(make('CPU'), 30000, 'cpu'); }
+    catch (e2) { throw new Error('Model deteksi tangan gagal dimuat. Periksa koneksi internet.'); }
+  }
+}
+function mapPoint(lm) {
+  var vw = video.videoWidth, vh = video.videoHeight, s = Math.max(W / vw, H / vh), dw = vw * s, dh = vh * s;
+  return { x: W - (lm.x * dw - (dw - W) / 2), y: lm.y * dh - (dh - H) / 2 };
+}
+function track(now) {
+  if (!landmarker || video.readyState < 2 || !video.videoWidth || video.currentTime === lastVT) return;
+  lastVT = video.currentTime;
+  try {
+    var r = landmarker.detectForVideo(video, now); trackErr = 0;
+    if (r && r.landmarks && r.landmarks.length) {
+      var p = mapPoint(r.landmarks[0][8]); /* ujung telunjuk */
+      if (!cur.has) { cur.x = p.x; cur.y = p.y; } else { cur.x += (p.x - cur.x) * 0.45; cur.y += (p.y - cur.y) * 0.45; }
+      cur.has = true; lastSeen = now;
+    } else if (now - lastSeen > 350) cur.has = false;
+  } catch (e) { if (++trackErr > 30) throw new Error('Deteksi tangan berhenti bekerja: ' + (e.message || e)); }
+}
+
+/* ---------- Data soal ---------- */
+var QS = [[245, 132], [368, 214], [457, 326], [586, 247], [129, 465], [374, 258], [648, 175], [293, 489], [567, 286], [476, 358]];
+var COLORS = ['#ff7a59', '#ffd23f', '#57d9a3'], HOLD = 0.6;
+var state = 'menu', qi = 0, score = 0, benar = 0, salah = 0, wrongQ = 0, transT = 0;
+var q = null, targets = [], bullets = [], ps = [], rings = [], msgs = [];
+var px = 0, py = 0, tilt = 0, hov = null, hold = 0, tick = 0;
+
+function shuffle(a) { for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+function mkOpts(c) {
+  var cand = shuffle([c - 10, c + 10, c - 100, c + 100, c - 20, c + 20]).filter(function (v) { return v > 0 && v !== c; });
+  return shuffle([c, cand[0], cand[1]]);
+}
+function loadQ() {
+  var a = QS[qi][0], b = QS[qi][1], opts = mkOpts(a + b), r = Math.max(40, Math.min(56, W / 14));
+  q = { a: a, b: b }; wrongQ = 0; hov = null; hold = 0; targets = [];
+  for (var i = 0; i < 3; i++) {
+    targets.push({
+      val: opts[i], r: r, col: COLORS[i], dead: false,
+      x: W * (0.2 + 0.3 * i) + (Math.random() - 0.5) * 30, y: H * (0.3 + 0.1 * Math.random()),
+      vx: (Math.random() < 0.5 ? -1 : 1) * (28 + Math.random() * 22), vy: (Math.random() < 0.5 ? -1 : 1) * (12 + Math.random() * 14), spin: Math.random() * 6
+    });
+  }
+  if (qi > 0) { msgs.push({ t: 'LEVEL ' + (qi + 1), c: 'hsl(' + (qi * 36) + ',100%,65%)', life: 1.4 }); SFX.level(); }
+}
+function startGame() {
+  qi = 0; score = 0; benar = 0; salah = 0; bullets = []; ps = []; rings = []; msgs = []; transT = 0;
+  px = W / 2; py = H - 90; loadQ(); state = 'play';
+  $('win').classList.add('hide'); $('topbtns').classList.remove('hide'); $('btnPause').textContent = 'JEDA';
+}
+function finish() {
+  state = 'win'; $('topbtns').classList.add('hide');
+  $('winstat').innerHTML = 'Skor akhir: <b>' + score + '</b><br>Jawaban benar: <b>' + benar + '</b><br>Jawaban salah: <b>' + salah + '</b>';
+  $('winmsg').textContent = salah <= 3 ? 'Luar biasa! Kamu pilot matematika sejati. Terus berlatih ya!' : 'Kerja bagus! Setiap kesalahan membuatmu makin pintar. Coba lagi untuk skor lebih tinggi!';
+  $('win').classList.remove('hide');
+}
+$('btnAgain').addEventListener('click', startGame);
+$('btnPause').addEventListener('click', function () {
+  if (state === 'play') { state = 'pause'; this.textContent = 'LANJUTKAN'; }
+  else if (state === 'pause') { state = 'play'; this.textContent = 'JEDA'; }
+});
+
+/* ---------- Efek ---------- */
+function explode(x, y, n) {
+  for (var i = 0; i < n; i++) {
+    var a = Math.random() * 6.283, s = 80 + Math.random() * 320, l = 0.7 + Math.random() * 0.6;
+    ps.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: l, max: l, c: 'hsl(' + Math.floor(Math.random() * 360) + ',100%,60%)', r: 3 + Math.random() * 4 });
+  }
+}
+function fire(t) {
+  var ok = (q.a + q.b === t.val), ox = px, oy = py - 50 * sc(), tx = t.x, ty = t.y;
+  if (!ok) tx += (Math.random() < 0.5 ? -1 : 1) * (t.r + 55);
+  bullets.push({ x: ox, y: oy, tx: tx, ty: ty, ok: ok, t: t }); SFX.laser();
+}
+function resolve(b) {
+  var t = b.t;
+  if (b.ok) {
+    score += 10; benar++; explode(t.x, t.y, 70); SFX.boom(); setTimeout(SFX.ok, 150);
+    msgs.push({ t: 'HEBAT! JAWABAN BENAR!', c: '#5dff8f', life: 1.6 });
+    rings.push({ x: t.x, y: t.y, r: 10, life: 1, hue: qi * 36 });
+    t.gone = true; transT = 1.8;
+  } else {
+    salah++; wrongQ++; t.dead = true; explode(b.x, b.y, 14); SFX.bad();
+    msgs.push({ t: 'COBA LAGI!', c: '#ffb347', life: 1.2 });
+  }
+}
+function sc() { return Math.max(0.7, Math.min(1.15, H / 720)); }
+
+/* ---------- Update ---------- */
+function update(dt) {
+  var i;
+  if (cur.has) {
+    var k = Math.min(1, dt * 6);
+    px += (cur.x - px) * k; py += (Math.max(H * 0.62, Math.min(H - 70, cur.y)) - py) * k;
+  }
+  px = Math.max(40, Math.min(W - 40, px));
+  tilt += (Math.max(-0.35, Math.min(0.35, (cur.x - px) / 200)) - tilt) * Math.min(1, dt * 8);
+  for (i = ps.length - 1; i >= 0; i--) { var p = ps[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt; if (p.life <= 0) ps.splice(i, 1); }
+  for (i = rings.length - 1; i >= 0; i--) { rings[i].r += 520 * dt; rings[i].life -= dt * 0.8; if (rings[i].life <= 0) rings.splice(i, 1); }
+  for (i = msgs.length - 1; i >= 0; i--) { msgs[i].life -= dt; if (msgs[i].life <= 0) msgs.splice(i, 1); }
+  if (state !== 'play') return;
+
+  for (i = 0; i < targets.length; i++) {
+    var t = targets[i]; if (t.gone) continue;
+    t.x += t.vx * dt; t.y += t.vy * dt; t.spin += dt;
+    if (t.x < t.r || t.x > W - t.r) { t.vx = -t.vx; t.x = Math.max(t.r, Math.min(W - t.r, t.x)); }
+    var y0 = H * 0.2 + 30, y1 = H * 0.58;
+    if (t.y < y0 || t.y > y1) { t.vy = -t.vy; t.y = Math.max(y0, Math.min(y1, t.y)); }
+  }
+  for (i = bullets.length - 1; i >= 0; i--) {
+    var b = bullets[i], dx = b.tx - b.x, dy = b.ty - b.y, d = Math.sqrt(dx * dx + dy * dy), step = 1000 * dt;
+    if (d <= step) { b.x = b.tx; b.y = b.ty; resolve(b); bullets.splice(i, 1); }
+    else { b.x += dx / d * step; b.y += dy / d * step; b.dx = dx / d; b.dy = dy / d; }
+  }
+  if (transT > 0) {
+    transT -= dt;
+    if (transT <= 0) { qi++; if (qi >= QS.length) finish(); else loadQ(); }
+    return;
+  }
+  var found = null;
+  if (cur.has && bullets.length === 0) {
+    for (i = 0; i < targets.length; i++) {
+      var o = targets[i];
+      if (!o.dead && !o.gone && Math.hypot(cur.x - o.x, cur.y - o.y) < o.r + 12) { found = o; break; }
+    }
+  }
+  if (found && hov === found) hold += dt;
+  else { hov = found; hold = 0; if (found) SFX.lock(); }
+  if (hov && hold >= HOLD) { var f = hov; hov = null; hold = 0; fire(f); }
+}
+
+/* ---------- Gambar ---------- */
+var STARS = [], CLOUDS = [];
+(function () { for (var i = 0; i < 50; i++) STARS.push({ x: Math.random(), y: Math.random() * 0.7, s: 1 + Math.random() * 2, p: Math.random() * 6 });
+  for (var j = 0; j < 5; j++) CLOUDS.push({ x: Math.random(), y: 0.15 + Math.random() * 0.6, s: 0.6 + Math.random() * 0.8, v: 0.004 + Math.random() * 0.006 }); })();
+
+function txt(s, x, y, size, color, align, stroke) {
+  ctx.font = '900 ' + size + 'px "Trebuchet MS",system-ui,sans-serif'; ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(3, size / 6); ctx.strokeStyle = stroke || 'rgba(10,20,60,.9)'; ctx.strokeText(s, x, y);
+  ctx.fillStyle = color || '#fff'; ctx.fillText(s, x, y);
+}
+function panel(x, y, w, h, fill, stroke) {
+  ctx.beginPath(); ctx.moveTo(x + 12, y); ctx.arcTo(x + w, y, x + w, y + h, 12); ctx.arcTo(x + w, y + h, x, y + h, 12);
+  ctx.arcTo(x, y + h, x, y, 12); ctx.arcTo(x, y, x + w, y, 12); ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = stroke; ctx.stroke();
+}
+function drawSky(now) {
+  var i, g = ctx.createLinearGradient(0, H * 0.55, 0, H);
+  g.addColorStop(0, 'rgba(60,120,255,0)'); g.addColorStop(1, 'rgba(90,200,255,.35)'); ctx.fillStyle = g; ctx.fillRect(0, H * 0.55, W, H * 0.45);
+  for (i = 0; i < STARS.length; i++) {
+    var s = STARS[i]; ctx.globalAlpha = 0.35 + 0.35 * Math.sin(now / 500 + s.p); ctx.fillStyle = '#fff'; ctx.fillRect(s.x * W, s.y * H, s.s, s.s);
+  }
+  ctx.globalAlpha = 0.28; ctx.fillStyle = '#fff';
+  for (i = 0; i < CLOUDS.length; i++) {
+    var c = CLOUDS[i]; if (state === 'play') c.x = (c.x + c.v * 0.016) % 1.2;
+    var cx = (c.x - 0.1) * W, cy = c.y * H, r = 28 * c.s;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.283); ctx.arc(cx + r, cy - r * 0.4, r * 1.1, 0, 6.283); ctx.arc(cx + 2 * r, cy, r * 0.9, 0, 6.283); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawTarget(t, now) {
+  if (t.gone) return;
+  ctx.save(); ctx.translate(t.x, t.y); ctx.globalAlpha = t.dead ? 0.4 : 1;
+  ctx.rotate(Math.sin(t.spin) * 0.15);
+  var g = ctx.createRadialGradient(-t.r * 0.3, -t.r * 0.3, t.r * 0.1, 0, 0, t.r);
+  g.addColorStop(0, '#fff'); g.addColorStop(0.25, t.dead ? '#889' : t.col); g.addColorStop(1, t.dead ? '#445' : '#3a2a6a');
+  ctx.beginPath();
+  for (var i = 0; i < 12; i++) { var a = i / 12 * 6.283, rr = t.r * (0.92 + 0.1 * Math.sin(i * 2.3)); ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath(); ctx.fillStyle = g; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,.18)';
+  ctx.beginPath(); ctx.arc(-t.r * 0.5, t.r * 0.45, t.r * 0.14, 0, 6.283); ctx.arc(t.r * 0.55, -t.r * 0.5, t.r * 0.1, 0, 6.283); ctx.fill();
+  ctx.restore();
+  txt(t.dead ? '\u2717 ' + t.val : String(t.val), t.x, t.y + 2, Math.round(t.r * 0.62), '#fff');
+}
+function drawPlane(now) {
+  var s = sc();
+  ctx.save(); ctx.translate(px, py); ctx.rotate(tilt); ctx.scale(s, s);
+  var fl = 14 + Math.random() * 10;
+  ctx.fillStyle = '#ffb347'; ctx.beginPath(); ctx.ellipse(0, 52 + fl / 2, 9, 10 + fl, 0, 0, 6.283); ctx.fill();
+  ctx.fillStyle = '#fff3a0'; ctx.beginPath(); ctx.ellipse(0, 50 + fl / 3, 4, 6 + fl / 2, 0, 0, 6.283); ctx.fill();
+  ctx.lineWidth = 3.5; ctx.strokeStyle = '#1b2a6b'; ctx.lineJoin = 'round';
+  ctx.fillStyle = '#ff5a5f'; ctx.beginPath();
+  ctx.moveTo(-80, 28); ctx.lineTo(-10, -4); ctx.lineTo(10, -4); ctx.lineTo(80, 28); ctx.lineTo(60, 38); ctx.lineTo(0, 24); ctx.lineTo(-60, 38); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.moveTo(-18, 36); ctx.lineTo(-34, 58); ctx.lineTo(-8, 50); ctx.closePath(); ctx.moveTo(18, 36); ctx.lineTo(34, 58); ctx.lineTo(8, 50); ctx.closePath(); ctx.fill(); ctx.stroke();
+  var g = ctx.createLinearGradient(-20, 0, 20, 0); g.addColorStop(0, '#dff3ff'); g.addColorStop(0.5, '#fff'); g.addColorStop(1, '#8fc4ff');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(0, 0, 21, 54, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ff5a5f'; ctx.beginPath(); ctx.ellipse(0, -44, 11, 14, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#7df9ff'; ctx.beginPath(); ctx.ellipse(0, -10, 10, 16, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.beginPath(); ctx.ellipse(-3, -15, 3, 6, 0, 0, 6.283); ctx.fill();
+  ctx.restore();
+}
+function draw(now) {
+  var i; ctx.clearRect(0, 0, W, H);
+  drawSky(now);
+  if (!q) return;
+  /* HUD */
+  panel(10, 10, 150, 78, 'rgba(10,20,60,.62)', '#7df9ff');
+  txt('Skor ' + score, 22, 28, 20, '#ffe14d', 'left'); txt('Soal ' + Math.min(qi + 1, 10) + ' / 10', 22, 50, 15, '#fff', 'left');
+  var lives = Math.max(0, 2 - wrongQ); txt('Nyawa ' + '\u2764'.repeat(lives) + '\u2661'.repeat(2 - lives), 22, 72, 15, '#ff7b8a', 'left');
+  ctx.fillStyle = 'rgba(10,20,60,.6)'; ctx.fillRect(0, 0, W, 6); ctx.fillStyle = '#5dff8f'; ctx.fillRect(0, 0, W * (benar / 10), 6);
+  /* Soal */
+  var qs = Math.round(Math.max(30, Math.min(52, W / 16))), pw = qs * 7.2;
+  panel(W / 2 - pw / 2, 14, pw, qs + 24, 'rgba(10,20,60,.72)', '#ffe14d');
+  txt(q.a + ' + ' + q.b + ' = ?', W / 2, 14 + (qs + 24) / 2 + 2, qs, '#fff');
+
+  for (i = 0; i < targets.length; i++) drawTarget(targets[i], now);
+  /* target lock */
+  if (hov) {
+    var p = hov.r + 14 + Math.sin(now / 110) * 3;
+    ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 3; ctx.setLineDash([10, 8]); ctx.lineDashOffset = -now / 40;
+    ctx.beginPath(); ctx.arc(hov.x, hov.y, p, 0, 6.283); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = '#5dff8f'; ctx.lineWidth = 7; ctx.beginPath();
+    ctx.arc(hov.x, hov.y, p + 9, -Math.PI / 2, -Math.PI / 2 + 6.283 * Math.min(hold / HOLD, 1)); ctx.stroke();
+  }
+  drawPlane(now);
+  /* peluru */
+  for (i = 0; i < bullets.length; i++) {
+    var b = bullets[i], dx = b.dx || 0, dy = b.dy || -1;
+    ctx.strokeStyle = '#ff3b6b'; ctx.lineWidth = 7; ctx.shadowColor = '#ff3b6b'; ctx.shadowBlur = 18; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - dx * 40, b.y - dy * 40); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke(); ctx.shadowBlur = 0;
+  }
+  for (i = 0; i < rings.length; i++) { var r = rings[i]; ctx.globalAlpha = Math.max(0, r.life); ctx.strokeStyle = 'hsl(' + (r.hue + i * 40) + ',100%,60%)'; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 6.283); ctx.stroke(); }
+  for (i = 0; i < ps.length; i++) { var pp = ps[i]; ctx.globalAlpha = Math.max(0, pp.life / pp.max); ctx.fillStyle = pp.c; ctx.beginPath(); ctx.arc(pp.x, pp.y, pp.r, 0, 6.283); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  for (i = 0; i < msgs.length; i++) {
+    var m = msgs[i], sz = Math.round(Math.max(28, Math.min(56, W / 18)));
+    ctx.globalAlpha = Math.min(1, m.life * 2); txt(m.t, W / 2, H * 0.46 + i * (sz + 8), sz * (1 + (1 - Math.min(m.life, 1)) * 0.1), m.c);
+  }
+  ctx.globalAlpha = 1;
+  if (state === 'pause') { ctx.fillStyle = 'rgba(8,14,44,.55)'; ctx.fillRect(0, 0, W, H); txt('JEDA', W / 2, H / 2, 64, '#ffe14d'); }
+  /* kursor AR */
+  if (cur.has) {
+    ctx.shadowColor = '#00f0ff'; ctx.shadowBlur = 22; ctx.strokeStyle = '#00f0ff'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(cur.x, cur.y, 16, 0, 6.283); ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(0,240,255,.25)'; ctx.beginPath(); ctx.arc(cur.x, cur.y, 16, 0, 6.283); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cur.x, cur.y, 4, 0, 6.283); ctx.fill();
+    if (hov && hold > 0) { ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(cur.x, cur.y, 25, -Math.PI / 2, -Math.PI / 2 + 6.283 * Math.min(hold / HOLD, 1)); ctx.stroke(); }
+  } else if (state === 'play') {
+    panel(W / 2 - 190, H * 0.7 - 24, 380, 48, 'rgba(10,20,60,.75)', '#ffb347');
+    txt('Angkat satu tangan di depan kamera \u270B', W / 2, H * 0.7, 18, '#ffe08a');
+  }
+}
+
+/* ---------- Loop ---------- */
+var last = 0;
+function loop(now) {
+  if (failed) return;
+  requestAnimationFrame(loop);
+  try {
+    var dt = Math.min((now - last) / 1000, 0.1) || 0.016; last = now;
+    track(now); update(dt); draw(now);
+  } catch (e) { showError('Terjadi kesalahan saat game berjalan: ' + (e.message || e)); }
+}
+
+$('btnStart').addEventListener('click', async function () {
+  this.disabled = true; initAudio();
+  try {
+    setStatus('Menyalakan kamera...'); await startCamera();
+    setStatus('Memuat deteksi tangan...'); await loadModel();
+    $('menu').classList.add('hide'); musicStart(); startGame(); requestAnimationFrame(loop);
+  } catch (e) { showError(e && e.message ? e.message : String(e)); }
+});
+})();
+</script>
+</body>
+</html>
